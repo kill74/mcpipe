@@ -1,0 +1,128 @@
+{
+  "$schema": "https://mcpipe.dev/schemas/pipeline/v1.json",
+  "version": "1.0.0",
+  "metadata": {
+    "id": "research-digest-pipeline",
+    "name": "Research & Digest"
+  },
+  "defaults": {
+    "timeout_ms": 30000,
+    "retry": {
+      "max_attempts": 3,
+      "backoff": "exponential",
+      "backoff_base_ms": 500,
+      "retryable_errors": ["rate_limit", "timeout", "server_error"]
+    },
+    "llm": {
+      "backend": "ollama",
+      "model": "qwen3:7b",
+      "temperature": 0.3,
+      "max_tokens": 2048
+    }
+  },
+  "inputs": {
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "The subject to research."
+    },
+    "output_lang": {
+      "type": "string",
+      "default": "en",
+      "pattern": "^[a-z]{2}$"
+    }
+  },
+  "mcp_servers": {
+    "brave_search": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${env:BRAVE_API_KEY}"
+      }
+    },
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/mcpipe-outputs"],
+      "env": {}
+    }
+  },
+  "steps": [
+    {
+      "id": "web_search",
+      "name": "Web search",
+      "prompt": {
+        "system": "You are a research assistant. Extract factual, verifiable information.",
+        "user": "Search for recent information about {{ inputs.topic }}."
+      },
+      "tools": {
+        "allow": ["brave_search.*"]
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 3,
+        "stop_on": "no_tool_call"
+      },
+      "outputs": {
+        "web_findings": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "synthesis",
+      "name": "Synthesize digest",
+      "depends_on": ["web_search"],
+      "llm": {
+        "backend": "anthropic",
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 2048
+      },
+      "prompt": {
+        "system": "You are a senior researcher. Language: {{ inputs.output_lang }}.",
+        "user": "Create a concise digest about {{ inputs.topic }} from these findings:\n\n{{ steps.web_search.outputs.web_findings }}"
+      },
+      "outputs": {
+        "digest": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "persist",
+      "name": "Write output to disk",
+      "depends_on": ["synthesis"],
+      "prompt": {
+        "system": "You write files exactly as instructed.",
+        "user": "Write the following content to a file named 'digest-{{ inputs.topic | slugify }}-{{ now | date: \"%Y%m%d\" }}.md':\n\n{{ steps.synthesis.outputs.digest }}"
+      },
+      "tools": {
+        "allow": ["filesystem.write_file"]
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 2,
+        "stop_on": "no_tool_call"
+      },
+      "outputs": {
+        "file_path": "{{ response.tool_results[0].path }}"
+      }
+    }
+  ],
+  "policy": {
+    "filesystem.write_file": {
+      "allowed_paths": [".mcpipe/outputs"],
+      "max_bytes": 1000000,
+      "max_calls": 2
+    },
+    "brave_search.*": {
+      "max_calls": 5
+    }
+  },
+  "output": {
+    "format": "markdown",
+    "destination": "stdout",
+    "include_run_metadata": true,
+    "fields": [
+      "steps.synthesis.outputs.digest",
+      "steps.persist.outputs.file_path"
+    ]
+  }
+}

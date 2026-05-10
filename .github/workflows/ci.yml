@@ -1,0 +1,312 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26.x"
+  CGO_ENABLED: "0"
+
+jobs:
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Lint GitHub Actions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@latest
+
+      - name: Verify gofmt
+        shell: bash
+        run: |
+          diff="$(gofmt -l cmd internal)"
+          if [ -n "$diff" ]; then
+            echo "The following files need gofmt:"
+            echo "$diff"
+            exit 1
+          fi
+
+      - name: Verify module files
+        shell: bash
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Verify generated artifacts are absent
+        shell: bash
+        run: |
+          forbidden="$(find . \
+            \( -path './.git' -o -path './.github' \) -prune -o \
+            \( -name '.mcpipe' -o -name '*.jsonl' -o -name '*.sig' -o -name '*.key' -o -name '*.pub' -o -name '*.lock' -o -name 'mcpipe' -o -name 'mcpipe.exe' \) \
+            -print)"
+          if [ -n "$forbidden" ]; then
+            echo "Generated or secret-like artifacts must not be committed:"
+            echo "$forbidden"
+            exit 1
+          fi
+
+  test:
+    name: test / ${{ matrix.os }}
+    needs: hygiene
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Race tests
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race -count=1 ./...
+
+      - name: Coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: error
+
+  security:
+    name: security
+    needs: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pipeline security lint
+        run: go run ./cmd/mcpipe vet -f examples/research-digest.pipeline.json
+
+      - name: Doctor in mock mode
+        run: go run ./cmd/mcpipe doctor -f examples/research-digest.pipeline.json --input "topic=ci smoke" --mock
+
+      - name: Lockfile drift check
+        shell: bash
+        run: |
+          tmp="$(mktemp -d)"
+          go run ./cmd/mcpipe lock -f examples/research-digest.pipeline.json --out "$tmp/pipeline.lock"
+          go run ./cmd/mcpipe lock -f examples/research-digest.pipeline.json --out "$tmp/pipeline.lock" --verify
+
+      - name: Signature smoke check
+        shell: bash
+        run: |
+          tmp="$(mktemp -d)"
+          go run ./cmd/mcpipe keygen --private "$tmp/mcpipe.key" --public "$tmp/mcpipe.pub"
+          go run ./cmd/mcpipe sign -f examples/research-digest.pipeline.json --key "$tmp/mcpipe.key" --out "$tmp/pipeline.sig"
+          go run ./cmd/mcpipe verify -f examples/research-digest.pipeline.json --key "$tmp/mcpipe.pub" --sig "$tmp/pipeline.sig"
+
+  codeql:
+    name: codeql
+    needs: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+
+  cli-smoke:
+    name: cli smoke
+    needs: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build CLI
+        run: go build -trimpath -o dist/mcpipe ./cmd/mcpipe
+
+      - name: Command smoke tests
+        shell: bash
+        run: |
+          ./dist/mcpipe version
+          ./dist/mcpipe new --list
+          ./dist/mcpipe new code-review "$RUNNER_TEMP/code-review.pipeline.json"
+          ./dist/mcpipe providers list
+          ./dist/mcpipe mcp list -f examples/research-digest.pipeline.json
+          ./dist/mcpipe validate -f examples/research-digest.pipeline.json
+          ./dist/mcpipe explain -f examples/research-digest.pipeline.json
+          ./dist/mcpipe diff examples/research-digest.pipeline.json "$RUNNER_TEMP/code-review.pipeline.json"
+          ./dist/mcpipe tools -f examples/research-digest.pipeline.json --mock
+          ./dist/mcpipe schema-docs --schema schemas/pipeline/v1.json >/tmp/mcpipe-schema.md
+          ./dist/mcpipe graph -f examples/research-digest.pipeline.json >/tmp/mcpipe.mmd
+          ./dist/mcpipe graph -f examples/research-digest.pipeline.json --format dot >/tmp/mcpipe.dot
+          ./dist/mcpipe dry-run -f examples/research-digest.pipeline.json --input "topic=ci smoke"
+          ./dist/mcpipe replay -f "$RUNNER_TEMP/code-review.pipeline.json" --input "repository_path=." --json --output-dir "$RUNNER_TEMP/mcpipe-outputs" >/tmp/mcpipe-replay.json
+          ./dist/mcpipe bundle -f "$RUNNER_TEMP/code-review.pipeline.json" --input "repository_path=." --out "$RUNNER_TEMP/code-review.mcpipebundle"
+          ./dist/mcpipe run -f examples/research-digest.pipeline.json --input "topic=ci smoke" --mock --json --no-audit --output-dir "$RUNNER_TEMP/mcpipe-outputs" >/tmp/mcpipe-run.json
+          ./dist/mcpipe completion bash >/tmp/mcpipe.bash
+          test -s /tmp/mcpipe.mmd
+          test -s /tmp/mcpipe.dot
+          test -s /tmp/mcpipe-schema.md
+          test -s /tmp/mcpipe-replay.json
+          test -s /tmp/mcpipe-run.json
+          test -s /tmp/mcpipe.bash
+          test -s "$RUNNER_TEMP/code-review.mcpipebundle"
+
+      - name: Verify JSON smoke output
+        shell: bash
+        run: |
+          python -m json.tool /tmp/mcpipe-run.json >/dev/null
+          python -m json.tool /tmp/mcpipe-replay.json >/dev/null
+
+      - name: Confirm no workspace artifacts
+        shell: bash
+        run: |
+          forbidden="$(find . \
+            \( -path './.git' -o -path './.github' -o -path './dist' \) -prune -o \
+            \( -name '.mcpipe' -o -name '*.jsonl' -o -name '*.sig' -o -name '*.key' -o -name '*.pub' -o -name '*.lock' \) \
+            -print)"
+          if [ -n "$forbidden" ]; then
+            echo "Smoke test left generated artifacts in workspace:"
+            echo "$forbidden"
+            exit 1
+          fi
+
+  build:
+    name: build / ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: [test, security, codeql, cli-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -ldflags="-s -w" -o "dist/mcpipe-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/mcpipe
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpipe-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/mcpipe-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  ci-ok:
+    name: ci ok
+    needs: [hygiene, test, security, codeql, cli-smoke, build]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check required jobs
+        run: |
+          if [ "${{ needs.hygiene.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.security.result }}" != "success" ] || \
+             [ "${{ needs.codeql.result }}" != "success" ] || \
+             [ "${{ needs.cli-smoke.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ]; then
+            echo "One or more CI jobs failed."
+            exit 1
+          fi
+          echo "All CI jobs passed."

@@ -1,0 +1,16 @@
+title = "mcpipe secret scanning"
+
+[allowlist]
+description = "Test fixtures and documentation may contain fake tokens."
+paths = [
+  '''README\.md''',
+  '''examples/.*''',
+  '''schemas/.*'''
+]
+
+[[rules]]
+id = "mcpipe-env-secret"
+description = "Common environment-backed secret assignment"
+regex = '''(?i)(api[_-]?key|token|secret|password)\s*=\s*['"]?[A-Za-z0-9_\-]{16,}'''
+entropy = 3.5
+keywords = ["api_key", "token", "secret", "password"]
