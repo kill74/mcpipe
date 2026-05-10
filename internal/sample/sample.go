@@ -175,6 +175,56 @@ const ResearchDigestPipeline = `{
     }
   },
 
+  "plugins": {
+    "web_research": {
+      "description": "Reusable web-search tool surface and call policy.",
+      "tools": {
+        "allow": ["brave_search.*"]
+      },
+      "policy": {
+        "brave_search.*": {
+          "max_calls": 5
+        }
+      }
+    },
+    "academic_research": {
+      "description": "Reusable academic-search tool surface and call policy.",
+      "tools": {
+        "allow": ["arxiv.*"]
+      },
+      "policy": {
+        "arxiv.*": {
+          "max_calls": 5
+        }
+      }
+    }
+  },
+
+  "agents": {
+    "researcher": {
+      "description": "Factual research agent with bounded tool loops.",
+      "llm": {
+        "backend": "ollama",
+        "model": "qwen3:7b",
+        "temperature": 0.1
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 5,
+        "stop_on": "no_tool_call"
+      }
+    },
+    "senior_analyst": {
+      "description": "High-signal synthesis agent for professional summaries.",
+      "llm": {
+        "backend": "anthropic",
+        "model": "claude-sonnet-4-20250514",
+        "temperature": 0.4,
+        "max_tokens": 2048
+      }
+    }
+  },
+
   "mcp_servers": {
     "brave_search": {
       "transport": "stdio",
@@ -222,6 +272,8 @@ const ResearchDigestPipeline = `{
         "system": "You are a research assistant. Extract only factual, verifiable information. Do not speculate.",
         "user": "Search the web for the most recent and relevant information about: {{ inputs.topic }}. Focus on results from the last 90 days. Return a structured list of findings."
       },
+      "plugins": ["web_research"],
+      "agent_ref": "researcher",
       "tools": {
         "allow": ["brave_search.*"],
         "deny": []
@@ -251,6 +303,8 @@ const ResearchDigestPipeline = `{
         "system": "You are a scientific literature assistant. Retrieve and summarize academic papers.",
         "user": "Find the 5 most relevant recent arXiv papers on: {{ inputs.topic }}. For each, extract: title, authors, date, abstract, and key contributions."
       },
+      "plugins": ["academic_research"],
+      "agent_ref": "researcher",
       "tools": {
         "allow": ["arxiv.*"]
       },
@@ -280,6 +334,7 @@ const ResearchDigestPipeline = `{
         "system": "You are a senior analyst. Produce concise, high-signal summaries. Cut filler.",
         "user": "Summarize the following web research findings into 5-7 bullet points. Highlight novel or surprising insights.\n\n{{ steps.web_search.outputs.web_findings }}"
       },
+      "agent_ref": "senior_analyst",
       "tools": {
         "allow": []
       },
@@ -304,6 +359,7 @@ const ResearchDigestPipeline = `{
         "system": "You are a technical research summarizer. Be precise. Use domain terminology correctly.",
         "user": "Summarize the following academic paper findings. Group related papers thematically and highlight consensus vs. disagreement.\n\n{{ steps.academic_search.outputs.academic_findings }}"
       },
+      "agent_ref": "senior_analyst",
       "tools": {
         "allow": []
       },
@@ -327,6 +383,7 @@ const ResearchDigestPipeline = `{
         "system": "You are a senior researcher writing a professional digest. Your output must be structured, authoritative, and actionable. Language: {{ inputs.output_lang }}.",
         "user": "Synthesize the following two research summaries into a unified digest on: {{ inputs.topic }}.\n\n## Web research\n{{ steps.web_summarize.outputs.web_summary }}\n\n## Academic research\n{{ steps.academic_summarize.outputs.academic_summary }}\n\nOutput format:\n1. Executive summary (3 sentences max)\n2. Key findings (bullet list)\n3. Open questions / unknowns\n4. Recommended next steps\n5. Sources and references"
       },
+      "agent_ref": "senior_analyst",
       "tools": {
         "allow": []
       },

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://mcpipe.dev/schemas/pipeline/v1.json",
+  "version": "1.0.0",
+  "metadata": {
+    "id": "plugins-agents-example",
+    "name": "Plugins & Agents Example",
+    "description": "Small pipeline showing reusable plugin tool surfaces and agent profiles."
+  },
+  "plugins": {
+    "local_files": {
+      "description": "Filesystem writing plugin constrained by policy.",
+      "mcp_servers": {
+        "filesystem": {
+          "transport": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", ".mcpipe/outputs"]
+        }
+      },
+      "tools": {
+        "allow": ["filesystem.write_file"]
+      },
+      "policy": {
+        "filesystem.write_file": {
+          "allowed_paths": [".mcpipe/outputs"],
+          "max_bytes": 1000000,
+          "max_calls": 1
+        }
+      }
+    }
+  },
+  "agents": {
+    "writer": {
+      "description": "Bounded file-writing agent profile.",
+      "llm": {
+        "backend": "ollama",
+        "model": "qwen3:1.7b",
+        "temperature": 0
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 2,
+        "stop_on": "no_tool_call"
+      }
+    }
+  },
+  "inputs": {
+    "title": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "steps": [
+    {
+      "id": "write_note",
+      "plugins": ["local_files"],
+      "agent_ref": "writer",
+      "prompt": {
+        "system": "You write small markdown notes exactly as requested.",
+        "user": "Write the following content to a file named 'note-{{ inputs.title | slugify }}.md':\n\n# {{ inputs.title }}\n\nCreated by mcpipe."
+      },
+      "outputs": {
+        "file_path": "{{ response.tool_results[0].path }}"
+      }
+    }
+  ],
+  "output": {
+    "format": "markdown",
+    "destination": "stdout",
+    "include_run_metadata": true,
+    "fields": ["steps.write_note.outputs.file_path"]
+  }
+}

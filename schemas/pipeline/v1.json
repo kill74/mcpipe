@@ -15,6 +15,14 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/input" }
     },
+    "plugins": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/plugin" }
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/agent_profile" }
+    },
     "mcp_servers": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/mcp_server" }
@@ -115,6 +123,33 @@
         "reconnect": { "$ref": "#/$defs/reconnect" }
       }
     },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "mcp_servers": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/mcp_server" }
+        },
+        "tools": { "$ref": "#/$defs/tools" },
+        "policy": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/tool_policy" }
+        }
+      }
+    },
+    "agent_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "llm": { "$ref": "#/$defs/llm" },
+        "prompt": { "$ref": "#/$defs/prompt" },
+        "tools": { "$ref": "#/$defs/tools" },
+        "agent": { "$ref": "#/$defs/agent" }
+      }
+    },
     "health_check": {
       "type": "object",
       "additionalProperties": false,
@@ -147,6 +182,8 @@
         "llm": { "$ref": "#/$defs/llm" },
         "prompt": { "$ref": "#/$defs/prompt" },
         "tools": { "$ref": "#/$defs/tools" },
+        "plugins": { "type": "array", "items": { "type": "string" } },
+        "agent_ref": { "type": "string" },
         "agent": { "$ref": "#/$defs/agent" },
         "outputs": { "type": "object", "additionalProperties": { "type": "string" } }
       }

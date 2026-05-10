@@ -468,6 +468,74 @@ func (a App) MCP(action string, opts EcosystemOptions) error {
 	}
 }
 
+func (a App) Plugins(action string, opts EcosystemOptions) error {
+	p, err := config.LoadFile(opts.File)
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "", "list":
+		var b strings.Builder
+		b.WriteString("Plugins\n")
+		if len(p.Plugins) == 0 {
+			b.WriteString("  none\n")
+		}
+		for _, name := range sortedMapKeys(p.Plugins) {
+			plugin := p.Plugins[name]
+			b.WriteString("  - ")
+			b.WriteString(name)
+			if plugin.Description != "" {
+				b.WriteString(": ")
+				b.WriteString(plugin.Description)
+			}
+			if len(plugin.Tools.Allow) > 0 {
+				b.WriteString(" tools=")
+				b.WriteString(ruleList(plugin.Tools.Allow))
+			}
+			b.WriteByte('\n')
+		}
+		_, err := io.WriteString(a.stdout(), b.String())
+		return err
+	default:
+		return fmt.Errorf("unknown plugins action %q", action)
+	}
+}
+
+func (a App) Agents(action string, opts EcosystemOptions) error {
+	p, err := config.LoadFile(opts.File)
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "", "list":
+		var b strings.Builder
+		b.WriteString("Agents\n")
+		if len(p.Agents) == 0 {
+			b.WriteString("  none\n")
+		}
+		for _, name := range sortedMapKeys(p.Agents) {
+			agent := p.Agents[name]
+			b.WriteString("  - ")
+			b.WriteString(name)
+			if agent.Description != "" {
+				b.WriteString(": ")
+				b.WriteString(agent.Description)
+			}
+			if agent.LLM != nil && (agent.LLM.Backend != "" || agent.LLM.Model != "") {
+				b.WriteString(" llm=")
+				b.WriteString(agent.LLM.Backend)
+				b.WriteString("/")
+				b.WriteString(agent.LLM.Model)
+			}
+			b.WriteByte('\n')
+		}
+		_, err := io.WriteString(a.stdout(), b.String())
+		return err
+	default:
+		return fmt.Errorf("unknown agents action %q", action)
+	}
+}
+
 func (a App) InspectRun(opts InspectOptions) error {
 	if strings.TrimSpace(opts.File) == "" {
 		return errors.New("inspect run requires --file")

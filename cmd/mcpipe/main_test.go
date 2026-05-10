@@ -115,6 +115,22 @@ func TestCLINewDiffReplayAndSummary(t *testing.T) {
 	if !strings.Contains(out.String(), "MCP Servers") || !strings.Contains(out.String(), "filesystem") {
 		t.Fatalf("unexpected mcp list:\n%s", out.String())
 	}
+
+	out.Reset()
+	if err := run([]string{"plugins", "list", "-f", research}, &out, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Plugins") || !strings.Contains(out.String(), "web_research") {
+		t.Fatalf("unexpected plugins list:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := run([]string{"agents", "list", "-f", research}, &out, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Agents") || !strings.Contains(out.String(), "senior_analyst") {
+		t.Fatalf("unexpected agents list:\n%s", out.String())
+	}
 }
 
 func TestCLIVersion(t *testing.T) {

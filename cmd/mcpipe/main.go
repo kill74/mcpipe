@@ -146,6 +146,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		return app.MCP(action, opts)
+	case "plugins":
+		action, opts, err := parseEcosystemFlags("plugins", args[1:], stderr)
+		if err != nil {
+			return err
+		}
+		return app.Plugins(action, opts)
+	case "agents":
+		action, opts, err := parseEcosystemFlags("agents", args[1:], stderr)
+		if err != nil {
+			return err
+		}
+		return app.Agents(action, opts)
 	case "diff":
 		opts, err := parseDiffFlags(args[1:], stderr)
 		if err != nil {
@@ -314,7 +326,7 @@ func parseEcosystemFlags(name string, args []string, stderr io.Writer) (string, 
 	if err := fs.Parse(args); err != nil {
 		return action, opts, err
 	}
-	if action == "doctor" || name == "mcp" {
+	if action == "doctor" || name == "mcp" || name == "plugins" || name == "agents" {
 		if strings.TrimSpace(opts.File) == "" {
 			return action, opts, errors.New("missing -f pipeline file")
 		}
@@ -436,6 +448,8 @@ Usage:
   mcpipe bundle -f pipeline.json [--input key=value] [--out run.mcpipebundle]
   mcpipe providers list|doctor [-f pipeline.json] [--mock]
   mcpipe mcp list|doctor -f pipeline.json [--mock]
+  mcpipe plugins list -f pipeline.json
+  mcpipe agents list -f pipeline.json
   mcpipe diff old.pipeline.json new.pipeline.json
   mcpipe inspect run audit.jsonl
   mcpipe schema-docs [--schema schemas/pipeline/v1.json] [--out docs/schema.md]
@@ -451,7 +465,7 @@ Usage:
 }
 
 func completionScript(shell string) (string, error) {
-	commands := "init new validate vet explain doctor graph tools bundle providers mcp diff inspect schema-docs dry-run replay run lock keygen sign verify completion version help"
+	commands := "init new validate vet explain doctor graph tools bundle providers mcp plugins agents diff inspect schema-docs dry-run replay run lock keygen sign verify completion version help"
 	commonFlags := "-f --file --input --input-file --mock --json --format --output-dir --audit-dir --no-audit --locked --lockfile --require-confirmation --yes --private --public --key --sig --out --schema --list --policy"
 	switch strings.ToLower(shell) {
 	case "bash":
@@ -493,7 +507,7 @@ _mcpipe "$@"
 	case "powershell", "pwsh":
 		return `Register-ArgumentCompleter -Native -CommandName mcpipe -ScriptBlock {
   param($wordToComplete, $commandAst, $cursorPosition)
-  $commands = @('init','new','validate','vet','explain','doctor','graph','tools','bundle','providers','mcp','diff','inspect','schema-docs','dry-run','replay','run','lock','keygen','sign','verify','completion','version','help')
+  $commands = @('init','new','validate','vet','explain','doctor','graph','tools','bundle','providers','mcp','plugins','agents','diff','inspect','schema-docs','dry-run','replay','run','lock','keygen','sign','verify','completion','version','help')
   $flags = @('-f','--file','--input','--input-file','--mock','--json','--format','--output-dir','--audit-dir','--no-audit','--locked','--lockfile','--require-confirmation','--yes','--private','--public','--key','--sig','--out','--schema','--list','--policy')
   $tokens = $commandAst.CommandElements | ForEach-Object { $_.ToString() }
   if ($tokens.Count -le 2) {

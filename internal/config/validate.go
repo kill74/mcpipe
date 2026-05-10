@@ -42,7 +42,8 @@ func (p *Pipeline) Validate() error {
 			problems = append(problems, fmt.Sprintf("duplicate step id %q", step.ID))
 		}
 		stepIndex[step.ID] = step
-		if strings.TrimSpace(step.Prompt.User) == "" {
+		effectiveStep := p.ResolveStep(step)
+		if strings.TrimSpace(effectiveStep.Prompt.User) == "" {
 			problems = append(problems, fmt.Sprintf("step %q prompt.user is required", step.ID))
 		}
 		if len(step.Outputs) == 0 {
@@ -51,6 +52,7 @@ func (p *Pipeline) Validate() error {
 	}
 
 	problems = append(problems, p.validateInputs()...)
+	problems = append(problems, p.validateExtensions()...)
 	problems = append(problems, p.validateMCPServers()...)
 	problems = append(problems, p.validateDependencies(stepIndex)...)
 	problems = append(problems, p.validateStepReferences(stepIndex)...)
@@ -87,6 +89,59 @@ func (p *Pipeline) validateInputs() []string {
 		if spec.Pattern != "" {
 			if _, err := regexp.Compile(spec.Pattern); err != nil {
 				problems = append(problems, fmt.Sprintf("input %q pattern is invalid: %v", name, err))
+			}
+		}
+	}
+	return problems
+}
+
+func (p *Pipeline) validateExtensions() []string {
+	var problems []string
+	for name, plugin := range p.Plugins {
+		if !stepIDPattern.MatchString(name) {
+			problems = append(problems, fmt.Sprintf("plugin %q name must match %s", name, stepIDPattern.String()))
+		}
+		for serverName, server := range plugin.MCPServers {
+			switch server.Transport {
+			case "stdio":
+				if strings.TrimSpace(server.Command) == "" {
+					problems = append(problems, fmt.Sprintf("plugin %q mcp server %q stdio command is required", name, serverName))
+				}
+			case "sse":
+				if strings.TrimSpace(server.URL) == "" {
+					problems = append(problems, fmt.Sprintf("plugin %q mcp server %q sse url is required", name, serverName))
+				}
+			default:
+				problems = append(problems, fmt.Sprintf("plugin %q mcp server %q has unsupported transport %q", name, serverName, server.Transport))
+			}
+		}
+		for rule := range plugin.Policy {
+			if _, _, ok := splitToolRule(rule); !ok {
+				problems = append(problems, fmt.Sprintf("plugin %q policy key %q must use server.tool or server.*", name, rule))
+			}
+		}
+	}
+	for name, profile := range p.Agents {
+		if !stepIDPattern.MatchString(name) {
+			problems = append(problems, fmt.Sprintf("agent %q name must match %s", name, stepIDPattern.String()))
+		}
+		if profile.Agent != nil {
+			switch profile.Agent.StopOn {
+			case "", "no_tool_call":
+			default:
+				problems = append(problems, fmt.Sprintf("agent %q stop_on %q is unsupported", name, profile.Agent.StopOn))
+			}
+		}
+	}
+	for _, step := range p.Steps {
+		for _, name := range step.Plugins {
+			if _, ok := p.Plugins[name]; !ok {
+				problems = append(problems, fmt.Sprintf("step %q references unknown plugin %q", step.ID, name))
+			}
+		}
+		if step.AgentRef != "" {
+			if _, ok := p.Agents[step.AgentRef]; !ok {
+				problems = append(problems, fmt.Sprintf("step %q references unknown agent %q", step.ID, step.AgentRef))
 			}
 		}
 	}

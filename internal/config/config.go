@@ -13,18 +13,20 @@ import (
 )
 
 type Pipeline struct {
-	Schema        string                `json:"$schema,omitempty"`
-	Version       string                `json:"version"`
-	Metadata      *Metadata             `json:"metadata,omitempty"`
-	Schedule      *Schedule             `json:"schedule,omitempty"`
-	Defaults      Defaults              `json:"defaults,omitempty"`
-	Inputs        map[string]InputSpec  `json:"inputs,omitempty"`
-	MCPServers    map[string]MCPServer  `json:"mcp_servers,omitempty"`
-	Steps         []Step                `json:"steps"`
-	ErrorHandling ErrorHandling         `json:"error_handling,omitempty"`
-	Policy        map[string]ToolPolicy `json:"policy,omitempty"`
-	Output        Output                `json:"output,omitempty"`
-	Observability *Observability        `json:"observability,omitempty"`
+	Schema        string                  `json:"$schema,omitempty"`
+	Version       string                  `json:"version"`
+	Metadata      *Metadata               `json:"metadata,omitempty"`
+	Schedule      *Schedule               `json:"schedule,omitempty"`
+	Defaults      Defaults                `json:"defaults,omitempty"`
+	Inputs        map[string]InputSpec    `json:"inputs,omitempty"`
+	Plugins       map[string]Plugin       `json:"plugins,omitempty"`
+	Agents        map[string]AgentProfile `json:"agents,omitempty"`
+	MCPServers    map[string]MCPServer    `json:"mcp_servers,omitempty"`
+	Steps         []Step                  `json:"steps"`
+	ErrorHandling ErrorHandling           `json:"error_handling,omitempty"`
+	Policy        map[string]ToolPolicy   `json:"policy,omitempty"`
+	Output        Output                  `json:"output,omitempty"`
+	Observability *Observability          `json:"observability,omitempty"`
 }
 
 type Metadata struct {
@@ -86,6 +88,21 @@ type MCPServer struct {
 	Reconnect   *Reconnect        `json:"reconnect,omitempty"`
 }
 
+type Plugin struct {
+	Description string                `json:"description,omitempty"`
+	MCPServers  map[string]MCPServer  `json:"mcp_servers,omitempty"`
+	Tools       Tools                 `json:"tools,omitempty"`
+	Policy      map[string]ToolPolicy `json:"policy,omitempty"`
+}
+
+type AgentProfile struct {
+	Description string       `json:"description,omitempty"`
+	LLM         *LLMConfig   `json:"llm,omitempty"`
+	Prompt      *Prompt      `json:"prompt,omitempty"`
+	Tools       Tools        `json:"tools,omitempty"`
+	Agent       *AgentConfig `json:"agent,omitempty"`
+}
+
 type HealthCheck struct {
 	Enabled    bool `json:"enabled,omitempty"`
 	IntervalMS int  `json:"interval_ms,omitempty"`
@@ -108,6 +125,8 @@ type Step struct {
 	LLM           *LLMConfig        `json:"llm,omitempty"`
 	Prompt        Prompt            `json:"prompt"`
 	Tools         Tools             `json:"tools,omitempty"`
+	Plugins       []string          `json:"plugins,omitempty"`
+	AgentRef      string            `json:"agent_ref,omitempty"`
 	Agent         *AgentConfig      `json:"agent,omitempty"`
 	Outputs       map[string]string `json:"outputs"`
 }
@@ -230,6 +249,12 @@ func normalize(p *Pipeline) {
 	if p.MCPServers == nil {
 		p.MCPServers = map[string]MCPServer{}
 	}
+	if p.Plugins == nil {
+		p.Plugins = map[string]Plugin{}
+	}
+	if p.Agents == nil {
+		p.Agents = map[string]AgentProfile{}
+	}
 	if p.ErrorHandling.FallbackSteps == nil {
 		p.ErrorHandling.FallbackSteps = map[string]FallbackStep{}
 	}
@@ -250,6 +275,7 @@ func normalize(p *Pipeline) {
 			p.Steps[i].Outputs = map[string]string{}
 		}
 	}
+	applyExtensions(p)
 }
 
 func (p *Pipeline) StepByID(id string) (Step, bool) {
@@ -262,6 +288,7 @@ func (p *Pipeline) StepByID(id string) (Step, bool) {
 }
 
 func (p *Pipeline) EffectiveStep(step Step) EffectiveStep {
+	step = p.ResolveStep(step)
 	timeout := p.Defaults.TimeoutMS
 	if timeout == 0 {
 		timeout = 30000
@@ -292,6 +319,103 @@ func (p *Pipeline) EffectiveStep(step Step) EffectiveStep {
 		llm = mergeLLM(llm, *step.LLM)
 	}
 	return EffectiveStep{Step: step, TimeoutMS: timeout, Retry: retry, LLM: llm}
+}
+
+func (p *Pipeline) ResolveStep(step Step) Step {
+	resolved := step
+	for _, name := range step.Plugins {
+		plugin, ok := p.Plugins[name]
+		if !ok {
+			continue
+		}
+		resolved.Tools = mergeTools(plugin.Tools, resolved.Tools)
+	}
+	if step.AgentRef != "" {
+		profile, ok := p.Agents[step.AgentRef]
+		if ok {
+			if resolved.LLM == nil && profile.LLM != nil {
+				copy := *profile.LLM
+				resolved.LLM = &copy
+			} else if resolved.LLM != nil && profile.LLM != nil {
+				merged := mergeLLM(*profile.LLM, *resolved.LLM)
+				resolved.LLM = &merged
+			}
+			if profile.Prompt != nil {
+				if resolved.Prompt.System == "" {
+					resolved.Prompt.System = profile.Prompt.System
+				}
+				if resolved.Prompt.User == "" {
+					resolved.Prompt.User = profile.Prompt.User
+				}
+			}
+			resolved.Tools = mergeTools(profile.Tools, resolved.Tools)
+			if resolved.Agent == nil && profile.Agent != nil {
+				copy := *profile.Agent
+				resolved.Agent = &copy
+			} else if resolved.Agent != nil && profile.Agent != nil {
+				merged := mergeAgent(*profile.Agent, *resolved.Agent)
+				resolved.Agent = &merged
+			}
+		}
+	}
+	return resolved
+}
+
+func applyExtensions(p *Pipeline) {
+	for _, plugin := range p.Plugins {
+		for name, server := range plugin.MCPServers {
+			if _, exists := p.MCPServers[name]; !exists {
+				p.MCPServers[name] = server
+			}
+		}
+		for rule, policy := range plugin.Policy {
+			if _, exists := p.Policy[rule]; !exists {
+				p.Policy[rule] = policy
+			}
+		}
+	}
+	for i := range p.Steps {
+		p.Steps[i] = p.ResolveStep(p.Steps[i])
+	}
+}
+
+func mergeTools(base, override Tools) Tools {
+	out := Tools{}
+	out.Allow = append(out.Allow, base.Allow...)
+	out.Allow = append(out.Allow, override.Allow...)
+	out.Deny = append(out.Deny, base.Deny...)
+	out.Deny = append(out.Deny, override.Deny...)
+	out.Allow = uniqueStrings(out.Allow)
+	out.Deny = uniqueStrings(out.Deny)
+	return out
+}
+
+func mergeAgent(base, override AgentConfig) AgentConfig {
+	out := base
+	if override.Enabled {
+		out.Enabled = true
+	}
+	if override.MaxIterations > 0 {
+		out.MaxIterations = override.MaxIterations
+	}
+	if override.StopOn != "" {
+		out.StopOn = override.StopOn
+	}
+	return out
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func mergeRetry(base, override RetryPolicy) RetryPolicy {

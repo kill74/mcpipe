@@ -208,6 +208,9 @@ jobs:
           ./dist/mcpipe new code-review "$RUNNER_TEMP/code-review.pipeline.json"
           ./dist/mcpipe providers list
           ./dist/mcpipe mcp list -f examples/research-digest.pipeline.json
+          ./dist/mcpipe validate -f examples/plugins-agents.pipeline.json
+          ./dist/mcpipe plugins list -f examples/plugins-agents.pipeline.json
+          ./dist/mcpipe agents list -f examples/plugins-agents.pipeline.json
           ./dist/mcpipe validate -f examples/research-digest.pipeline.json
           ./dist/mcpipe explain -f examples/research-digest.pipeline.json
           ./dist/mcpipe diff examples/research-digest.pipeline.json "$RUNNER_TEMP/code-review.pipeline.json"

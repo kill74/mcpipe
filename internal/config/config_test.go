@@ -100,6 +100,73 @@ func TestValidateRequiresReferencedStepDependency(t *testing.T) {
 	}
 }
 
+func TestPluginsAndAgentsMergeIntoSteps(t *testing.T) {
+	p, err := Load(strings.NewReader(`{
+		"version": "1.0.0",
+		"plugins": {
+			"search": {
+				"mcp_servers": {
+					"brave_search": {"transport": "stdio", "command": "npx"}
+				},
+				"tools": {"allow": ["brave_search.*"]},
+				"policy": {"brave_search.*": {"max_calls": 2}}
+			}
+		},
+		"agents": {
+			"researcher": {
+				"llm": {"backend": "ollama", "model": "qwen"},
+				"agent": {"enabled": true, "max_iterations": 3, "stop_on": "no_tool_call"}
+			}
+		},
+		"steps": [
+			{"id": "a", "plugins": ["search"], "agent_ref": "researcher", "prompt": {"user": "a"}, "outputs": {"out": "{{ response.text }}"}}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	step := p.Steps[0]
+	if len(step.Tools.Allow) != 1 || step.Tools.Allow[0] != "brave_search.*" {
+		t.Fatalf("plugin tools were not merged: %#v", step.Tools.Allow)
+	}
+	if _, ok := p.MCPServers["brave_search"]; !ok {
+		t.Fatalf("plugin mcp server was not registered: %#v", p.MCPServers)
+	}
+	if p.Policy["brave_search.*"].MaxCalls != 2 {
+		t.Fatalf("plugin policy was not merged: %#v", p.Policy)
+	}
+	effective := p.EffectiveStep(step)
+	if effective.LLM.Backend != "ollama" || effective.LLM.Model != "qwen" {
+		t.Fatalf("agent llm was not merged: %#v", effective.LLM)
+	}
+	if effective.Step.Agent == nil || !effective.Step.Agent.Enabled || effective.Step.Agent.MaxIterations != 3 {
+		t.Fatalf("agent runtime config was not merged: %#v", effective.Step.Agent)
+	}
+}
+
+func TestValidateRejectsUnknownPluginAndAgent(t *testing.T) {
+	p, err := Load(strings.NewReader(`{
+		"version": "1.0.0",
+		"defaults": {"llm": {"backend": "ollama", "model": "qwen"}},
+		"steps": [
+			{"id": "a", "plugins": ["missing_plugin"], "agent_ref": "missing_agent", "prompt": {"user": "a"}, "outputs": {"out": "{{ response.text }}"}}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = p.Validate()
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), `unknown plugin "missing_plugin"`) || !strings.Contains(err.Error(), `unknown agent "missing_agent"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestResolveInputsValidatesEnumAndPattern(t *testing.T) {
 	p, err := Load(strings.NewReader(`{
 		"version": "1.0.0",

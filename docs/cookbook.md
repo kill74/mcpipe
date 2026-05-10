@@ -47,9 +47,34 @@ Replay uses deterministic mock adapters and disables audit writing. It is useful
 mcpipe tools -f examples/research-digest.pipeline.json --mock
 mcpipe providers list
 mcpipe mcp list -f examples/research-digest.pipeline.json
+mcpipe plugins list -f examples/plugins-agents.pipeline.json
+mcpipe agents list -f examples/plugins-agents.pipeline.json
 ```
 
 Use this before live execution to check which tools each step can actually see after `allow` and `deny` rules are resolved.
+
+## Reuse Plugins And Agents
+
+```powershell
+mcpipe validate -f examples/plugins-agents.pipeline.json
+mcpipe replay -f examples/plugins-agents.pipeline.json --input "title=Launch Notes" --json
+```
+
+Use plugins for reusable MCP servers, tool grants, and policy. Use agents for reusable model and agent-loop settings. A step can opt into both:
+
+```json
+{
+  "id": "write_note",
+  "plugins": ["local_files"],
+  "agent_ref": "writer",
+  "prompt": {
+    "user": "Write a short note."
+  },
+  "outputs": {
+    "file_path": "{{ response.tool_results[0].path }}"
+  }
+}
+```
 
 ## Create A Bundle
 

@@ -73,7 +73,7 @@ go run ./cmd/mcpipe new code-review review.pipeline.json
 
 ## The Pipeline Model
 
-A pipeline has inputs, optional MCP servers, ordered steps, policies, and selected outputs. Each step renders a prompt, optionally exposes tools, calls an LLM, and writes named outputs for downstream steps.
+A pipeline has inputs, optional plugins, optional agent profiles, MCP servers, ordered steps, policies, and selected outputs. Each step renders a prompt, optionally exposes tools, calls an LLM, and writes named outputs for downstream steps.
 
 Minimal shape:
 
@@ -94,9 +94,20 @@ Minimal shape:
       "required": true
     }
   },
+  "agents": {
+    "summarizer": {
+      "description": "Reusable LLM profile for concise summaries.",
+      "llm": {
+        "backend": "ollama",
+        "model": "qwen3:7b",
+        "temperature": 0.2
+      }
+    }
+  },
   "steps": [
     {
       "id": "summarize",
+      "agent_ref": "summarizer",
       "prompt": {
         "user": "Summarize {{ inputs.topic }} in five bullets."
       },
@@ -171,6 +182,8 @@ mcpipe bundle -f pipeline.json --input "topic=demo" --out demo.mcpipebundle
 # Inspect installed provider/MCP surface
 mcpipe providers list
 mcpipe mcp list -f pipeline.json
+mcpipe plugins list -f pipeline.json
+mcpipe agents list -f pipeline.json
 
 # Summarize a redacted audit log
 mcpipe inspect run .mcpipe/runs/<run_id>.jsonl
@@ -312,6 +325,76 @@ Notes:
 - `${env:NAME}` references are expanded when launching MCP servers
 - stdio MCP is executable in v1
 - SSE MCP config is parsed for forward compatibility but not executed yet
+
+## Plugins And Agents
+
+Plugins package reusable MCP servers, tool allow/deny rules, and tool policies:
+
+```json
+{
+  "plugins": {
+    "local_files": {
+      "description": "Filesystem writing plugin constrained by policy.",
+      "mcp_servers": {
+        "filesystem": {
+          "transport": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", ".mcpipe/outputs"]
+        }
+      },
+      "tools": {
+        "allow": ["filesystem.write_file"]
+      },
+      "policy": {
+        "filesystem.write_file": {
+          "allowed_paths": [".mcpipe/outputs"],
+          "max_calls": 1
+        }
+      }
+    }
+  }
+}
+```
+
+Agents package reusable LLM and agent-loop defaults:
+
+```json
+{
+  "agents": {
+    "writer": {
+      "description": "Bounded file-writing agent.",
+      "llm": {
+        "backend": "ollama",
+        "model": "qwen3:1.7b",
+        "temperature": 0
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 2,
+        "stop_on": "no_tool_call"
+      }
+    }
+  }
+}
+```
+
+Steps opt in with `plugins` and `agent_ref`. Plugin and agent defaults are merged first; explicit step fields still win.
+
+```json
+{
+  "id": "write_note",
+  "plugins": ["local_files"],
+  "agent_ref": "writer",
+  "prompt": {
+    "user": "Write a note about {{ inputs.topic }}."
+  },
+  "outputs": {
+    "file_path": "{{ response.tool_results[0].path }}"
+  }
+}
+```
+
+See [examples/plugins-agents.pipeline.json](./examples/plugins-agents.pipeline.json).
 
 ## Templates
 
