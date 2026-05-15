@@ -60,9 +60,9 @@ type openaiStreamChunk struct {
 	ID      string `json:"id"`
 	Choices []struct {
 		Delta struct {
-			Content    string           `json:"content,omitempty"`
-			ToolCalls  []openaiToolCall `json:"tool_calls,omitempty"`
-			Role       string           `json:"role,omitempty"`
+			Content   string           `json:"content,omitempty"`
+			ToolCalls []openaiToolCall `json:"tool_calls,omitempty"`
+			Role      string           `json:"role,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

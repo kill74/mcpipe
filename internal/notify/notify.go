@@ -13,17 +13,17 @@ import (
 )
 
 type Payload struct {
-	Event       string    `json:"event"`
-	RunID       string    `json:"run_id,omitempty"`
-	Pipeline    string    `json:"pipeline"`
-	FailedStep  string    `json:"failed_step,omitempty"`
-	Error       string    `json:"error"`
-	Timestamp   string    `json:"timestamp"`
-	DurationMS  int64     `json:"duration_ms,omitempty"`
-	Attempts    int       `json:"attempts,omitempty"`
-	ToolCalls   int       `json:"tool_calls,omitempty"`
-	InputTokens int       `json:"input_tokens,omitempty"`
-	OutputTokens int      `json:"output_tokens,omitempty"`
+	Event        string `json:"event"`
+	RunID        string `json:"run_id,omitempty"`
+	Pipeline     string `json:"pipeline"`
+	FailedStep   string `json:"failed_step,omitempty"`
+	Error        string `json:"error"`
+	Timestamp    string `json:"timestamp"`
+	DurationMS   int64  `json:"duration_ms,omitempty"`
+	Attempts     int    `json:"attempts,omitempty"`
+	ToolCalls    int    `json:"tool_calls,omitempty"`
+	InputTokens  int    `json:"input_tokens,omitempty"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
 }
 
 func Send(ctx context.Context, cfg config.Notify, pipelineFile, runID, failedStep, errMsg string, startedAt, endedAt time.Time, attempts, toolCalls, inputTokens, outputTokens int) error {

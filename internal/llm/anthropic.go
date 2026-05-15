@@ -49,10 +49,10 @@ type anthropicContent struct {
 }
 
 type anthropicStreamEvent struct {
-	Type  string          `json:"type"`
-	Index int             `json:"index,omitempty"`
-	Delta anthropicDelta  `json:"delta,omitempty"`
-	Usage anthropicUsage  `json:"usage,omitempty"`
+	Type  string         `json:"type"`
+	Index int            `json:"index,omitempty"`
+	Delta anthropicDelta `json:"delta,omitempty"`
+	Usage anthropicUsage `json:"usage,omitempty"`
 }
 
 type anthropicDelta struct {

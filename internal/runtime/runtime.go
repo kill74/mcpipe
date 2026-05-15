@@ -21,12 +21,12 @@ import (
 )
 
 type Engine struct {
-	Pipeline      *config.Pipeline
-	Inputs        map[string]any
-	LLM           llm.Client
-	MCP           mcp.Manager
-	Now           func() time.Time
-	Security      *security.Policy
+	Pipeline       *config.Pipeline
+	Inputs         map[string]any
+	LLM            llm.Client
+	MCP            mcp.Manager
+	Now            func() time.Time
+	Security       *security.Policy
 	ProgressWriter io.Writer
 }
 
