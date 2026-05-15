@@ -280,6 +280,7 @@ func (a App) Doctor(ctx context.Context, opts PipelineOptions) error {
 	}
 	reportProviderChecks(ctx, &report, p, opts.Mock)
 	reportMCPChecks(&report, p, opts.Mock)
+	reportEnvChecks(&report, p)
 	redactor := securityPolicyFromPipeline(p, opts, nil).Redactor
 	if _, err := io.WriteString(a.stdout(), redactor.RedactString(report.String())); err != nil {
 		return err
@@ -650,6 +651,9 @@ func (a App) Run(ctx context.Context, opts PipelineOptions) error {
 		MCP:      manager,
 		Now:      a.Now,
 		Security: policy,
+	}
+	if !opts.JSON {
+		engine.ProgressWriter = a.stdout()
 	}
 	runCtx := ctx
 	cancel := func() {}
@@ -1037,6 +1041,44 @@ func reportMCPChecks(report *doctorReport, p *config.Pipeline, mock bool) {
 	}
 }
 
+var tplEnvRefPattern = regexp.MustCompile(`\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*[\}|]`)
+
+func reportEnvChecks(report *doctorReport, p *config.Pipeline) {
+	refs := map[string]bool{}
+	for _, step := range p.Steps {
+		for _, match := range tplEnvRefPattern.FindAllStringSubmatch(step.Prompt.System, -1) {
+			refs[match[1]] = true
+		}
+		for _, match := range tplEnvRefPattern.FindAllStringSubmatch(step.Prompt.User, -1) {
+			refs[match[1]] = true
+		}
+		for _, expr := range step.Outputs {
+			for _, match := range tplEnvRefPattern.FindAllStringSubmatch(expr, -1) {
+				refs[match[1]] = true
+			}
+		}
+	}
+	if len(refs) == 0 {
+		return
+	}
+	names := make([]string, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var missing []string
+	for _, name := range names {
+		if os.Getenv(name) == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		report.add("env vars", "ok", fmt.Sprintf("%d referenced, all set", len(names)))
+	} else {
+		report.add("env vars", "warn", fmt.Sprintf("unset: %s", strings.Join(missing, ", ")))
+	}
+}
+
 var envRefPattern = regexp.MustCompile(`\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 func expandEnvRefs(input string) string {
@@ -1109,6 +1151,11 @@ func securityPolicyFromPipeline(p *config.Pipeline, opts PipelineOptions, inputs
 	}
 	for key, value := range inputs {
 		redactor.AddNamedValue(key, fmt.Sprint(value))
+	}
+	for _, kv := range os.Environ() {
+		if key, val, ok := strings.Cut(kv, "="); ok && security.IsSensitiveName(key) {
+			redactor.AddValue(val)
+		}
 	}
 	policy.Redactor = redactor
 	policy.Normalize()

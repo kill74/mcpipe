@@ -52,7 +52,7 @@ func DryRun(p *config.Pipeline, inputs map[string]any, now time.Time) (string, e
 
 	for _, level := range levels {
 		for _, step := range level {
-			ctx := pipetemplate.Context{Inputs: inputs, StepOutputs: stepOutputs, Now: now}
+			ctx := pipetemplate.Context{Inputs: inputs, StepOutputs: stepOutputs, Now: now, Env: envMap()}
 			system, systemErr := pipetemplate.RenderString(step.Prompt.System, ctx)
 			user, userErr := pipetemplate.RenderString(step.Prompt.User, ctx)
 			b.WriteString("Step: ")

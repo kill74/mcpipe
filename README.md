@@ -13,7 +13,7 @@ LLM automation gets risky fast when prompts, tools, secrets, file writes, retrie
 - strict validation before runtime
 - dry-run previews before spending tokens or calling tools
 - deterministic mock mode for CI and local development
-- real Ollama and Anthropic adapters
+- real Ollama, Anthropic, and OpenAI adapters
 - real MCP stdio tool execution
 - dependency-aware step orchestration
 - secure file-write sandboxing
@@ -44,6 +44,7 @@ Requirements:
 - Go 1.26+
 - Optional: Ollama for local models
 - Optional: `ANTHROPIC_API_KEY` for Anthropic
+- Optional: `OPENAI_API_KEY` for OpenAI
 - Optional: Node/npm for npm-based MCP stdio servers such as `npx @modelcontextprotocol/...`
 
 ## Quick Start
@@ -130,6 +131,11 @@ Templates support the example-compatible expressions used throughout the repo:
 - `{{ response.tool_results[0].path }}`
 - `{{ inputs.topic | slugify }}`
 - `{{ now | date: "%Y%m%d" }}`
+- `{{ inputs.name | upper }}`, `| lower`, `| trim`
+- `{{ inputs.text | truncate: 80 }}`
+- `{{ inputs.data | json }}`
+- `{{ inputs.token | base64 }}`
+- `{{ env.DATABASE_URL }}` — environment variable (context overrides OS env, missing returns empty)
 
 ## Inputs
 
@@ -452,6 +458,13 @@ $env:ANTHROPIC_API_KEY = "..."
 mcpipe run -f pipeline.json --input "topic=demo"
 ```
 
+OpenAI:
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+mcpipe run -f pipeline.json --input "topic=demo"
+```
+
 For CI and local development without secrets, use `--mock`.
 
 ## Shell Completion
@@ -498,6 +511,48 @@ On Unix-like shells with `make`:
 ```bash
 make ci
 ```
+
+## Streaming
+
+Steps can stream tokens in real-time when `stream: true` is set in the LLM config. Progress is written to stdout for human-readable runs and suppressed for `--json` output:
+
+```json
+{
+  "defaults": {
+    "llm": {
+      "backend": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "stream": true
+    }
+  }
+}
+```
+
+Supported by Anthropic, OpenAI, and Ollama. Streaming falls back to non-streaming when `--json` is used.
+
+## Failure Notifications
+
+Configure webhook notifications for pipeline failures:
+
+```json
+{
+  "error_handling": {
+    "on_pipeline_failure": {
+      "notify": {
+        "channel": "webhook",
+        "url": "https://hooks.slack.com/services/...",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "include_run_id": true,
+        "include_failed_step": true
+      }
+    }
+  }
+}
+```
+
+Notifications retry up to 3 times with exponential backoff. The payload includes event type, run ID, failed step, error message, duration, and token usage.
 
 ## Project Layout
 

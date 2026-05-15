@@ -29,6 +29,7 @@ type Request struct {
 	User        string
 	Tools       []ToolDefinition
 	ToolResults []ToolResult
+	Progress    func(chunk string)
 }
 
 type ToolDefinition struct {
@@ -65,6 +66,8 @@ type Router struct {
 	OllamaURL    string
 	AnthropicURL string
 	AnthropicKey string
+	OpenAIURL    string
+	OpenAIKey    string
 }
 
 func NewRouter(mock bool) *Router {
@@ -74,6 +77,8 @@ func NewRouter(mock bool) *Router {
 		OllamaURL:    defaultOllamaURL(),
 		AnthropicURL: "https://api.anthropic.com/v1/messages",
 		AnthropicKey: os.Getenv("ANTHROPIC_API_KEY"),
+		OpenAIURL:    "https://api.openai.com",
+		OpenAIKey:    os.Getenv("OPENAI_API_KEY"),
 	}
 }
 
@@ -86,6 +91,8 @@ func (r *Router) Complete(ctx context.Context, req Request) (Response, error) {
 		return r.completeOllama(ctx, req)
 	case "anthropic":
 		return r.completeAnthropic(ctx, req)
+	case "openai":
+		return r.completeOpenAI(ctx, req)
 	case "":
 		return Response{}, errors.New("llm backend is required")
 	default:

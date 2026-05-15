@@ -1,7 +1,10 @@
 package template
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +17,7 @@ type Context struct {
 	StepOutputs map[string]map[string]string
 	Response    Response
 	Now         time.Time
+	Env         map[string]string
 }
 
 type Response struct {
@@ -127,6 +131,18 @@ func resolveValue(expr string, ctx Context) (any, error) {
 	if strings.HasPrefix(expr, "response.tool_results[") {
 		return resolveToolResult(expr, ctx)
 	}
+	if strings.HasPrefix(expr, "env.") {
+		name := strings.TrimPrefix(expr, "env.")
+		if ctx.Env != nil {
+			if value, ok := ctx.Env[name]; ok {
+				return value, nil
+			}
+		}
+		if value := os.Getenv(name); value != "" {
+			return value, nil
+		}
+		return "", nil
+	}
 	return nil, fmt.Errorf("unsupported template expression %q", expr)
 }
 
@@ -192,6 +208,51 @@ func applyFilter(value any, filter string) (any, error) {
 			return nil, fmt.Errorf("date filter format must be quoted")
 		}
 		return t.Format(strftimeToGo(fmt.Sprint(format))), nil
+	case "upper":
+		if hasArg {
+			return nil, fmt.Errorf("upper filter does not accept arguments")
+		}
+		return strings.ToUpper(fmt.Sprint(value)), nil
+	case "lower":
+		if hasArg {
+			return nil, fmt.Errorf("lower filter does not accept arguments")
+		}
+		return strings.ToLower(fmt.Sprint(value)), nil
+	case "trim":
+		if hasArg {
+			return nil, fmt.Errorf("trim filter does not accept arguments")
+		}
+		return strings.TrimSpace(fmt.Sprint(value)), nil
+	case "truncate":
+		if !hasArg {
+			return nil, fmt.Errorf("truncate filter requires a length argument")
+		}
+		limit, err := strconv.Atoi(strings.TrimSpace(arg))
+		if err != nil {
+			return nil, fmt.Errorf("truncate filter requires a numeric length: %w", err)
+		}
+		s := fmt.Sprint(value)
+		if len(s) <= limit {
+			return s, nil
+		}
+		if limit <= 3 {
+			return s[:limit], nil
+		}
+		return s[:limit-3] + "...", nil
+	case "json":
+		if hasArg {
+			return nil, fmt.Errorf("json filter does not accept arguments")
+		}
+		data, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("json filter: %w", err)
+		}
+		return string(data), nil
+	case "base64":
+		if hasArg {
+			return nil, fmt.Errorf("base64 filter does not accept arguments")
+		}
+		return base64.StdEncoding.EncodeToString([]byte(fmt.Sprint(value))), nil
 	default:
 		return nil, fmt.Errorf("unsupported filter %q", name)
 	}

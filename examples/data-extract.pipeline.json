@@ -1,0 +1,103 @@
+{
+  "$schema": "https://mcpipe.dev/schemas/pipeline/v1.json",
+  "version": "1.0.0",
+  "metadata": {
+    "id": "data-extract-pipeline",
+    "name": "Structured Data Extraction",
+    "description": "Extract structured fields from text using OpenAI, demonstrating parallel steps and new input types."
+  },
+  "defaults": {
+    "timeout_ms": 30000,
+    "retry": {
+      "max_attempts": 2,
+      "backoff": "exponential",
+      "backoff_base_ms": 500,
+      "retryable_errors": ["rate_limit", "timeout", "server_error"]
+    },
+    "llm": {
+      "backend": "openai",
+      "model": "gpt-4o-mini",
+      "temperature": 0.1,
+      "max_tokens": 1024
+    }
+  },
+  "inputs": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "The text to extract data from."
+    },
+    "fields": {
+      "type": "array",
+      "default": ["names", "dates", "amounts"],
+      "description": "JSON array of field categories to extract."
+    },
+    "confidence_threshold": {
+      "type": "number",
+      "default": 0.7,
+      "description": "Minimum confidence score for extracted items."
+    },
+    "include_metadata": {
+      "type": "boolean",
+      "default": true,
+      "description": "Include extraction metadata in output."
+    }
+  },
+  "steps": [
+    {
+      "id": "extract_names",
+      "name": "Extract names",
+      "prompt": {
+        "system": "You extract structured data from text. Return only JSON.",
+        "user": "Extract all person and organization names from this text. Return as a JSON array of strings. Only include items with confidence >= {{ inputs.confidence_threshold }}.\n\n{{ inputs.text }}"
+      },
+      "outputs": {
+        "names": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "extract_dates",
+      "name": "Extract dates",
+      "depends_on": [],
+      "prompt": {
+        "system": "You extract structured data from text. Return only JSON.",
+        "user": "Extract all dates and temporal references from this text. Return as a JSON array of objects with 'date' and 'context' fields. Only include items with confidence >= {{ inputs.confidence_threshold }}.\n\n{{ inputs.text }}"
+      },
+      "outputs": {
+        "dates": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "extract_amounts",
+      "name": "Extract amounts",
+      "depends_on": [],
+      "prompt": {
+        "system": "You extract structured data from text. Return only JSON.",
+        "user": "Extract all monetary amounts, quantities, and numerical values from this text. Return as a JSON array of objects with 'value', 'unit', and 'context' fields. Only include items with confidence >= {{ inputs.confidence_threshold }}.\n\n{{ inputs.text }}"
+      },
+      "outputs": {
+        "amounts": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "compile",
+      "name": "Compile results",
+      "depends_on": ["extract_names", "extract_dates", "extract_amounts"],
+      "prompt": {
+        "system": "You compile structured extraction results into a clean report.",
+        "user": "Compile these extraction results into a single structured report:\n\nNames: {{ steps.extract_names.outputs.names }}\nDates: {{ steps.extract_dates.outputs.dates }}\nAmounts: {{ steps.extract_amounts.outputs.amounts }}\n\nConfidence threshold: {{ inputs.confidence_threshold }}\nInclude metadata: {{ inputs.include_metadata }}\n\nReturn a clean, readable summary."
+      },
+      "outputs": {
+        "report": "{{ response.text }}"
+      }
+    }
+  ],
+  "output": {
+    "format": "json",
+    "destination": "stdout",
+    "include_run_metadata": true,
+    "fields": [
+      "steps.compile.outputs.report"
+    ]
+  }
+}

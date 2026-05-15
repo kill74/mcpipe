@@ -1,0 +1,149 @@
+{
+  "$schema": "https://mcpipe.dev/schemas/pipeline/v1.json",
+  "version": "1.0.0",
+  "metadata": {
+    "id": "customer-support-pipeline",
+    "name": "Customer Support Triage",
+    "description": "Classify, prioritize, and draft responses to customer support tickets using plugins and agent profiles."
+  },
+  "defaults": {
+    "timeout_ms": 20000,
+    "retry": {
+      "max_attempts": 2,
+      "backoff": "fixed",
+      "backoff_base_ms": 1000,
+      "retryable_errors": ["rate_limit", "timeout"]
+    },
+    "llm": {
+      "backend": "ollama",
+      "model": "qwen3:7b",
+      "temperature": 0.3,
+      "max_tokens": 1024
+    }
+  },
+  "inputs": {
+    "ticket": {
+      "type": "string",
+      "required": true,
+      "description": "The customer support ticket text."
+    },
+    "priority": {
+      "type": "enum",
+      "values": ["low", "medium", "high", "critical"],
+      "default": "medium",
+      "description": "Override priority classification."
+    },
+    "language": {
+      "type": "string",
+      "default": "en",
+      "pattern": "^[a-z]{2}$",
+      "description": "Response language code."
+    }
+  },
+  "plugins": {
+    "knowledge_base": {
+      "description": "Access internal knowledge base for support articles.",
+      "mcp_servers": {
+        "knowledge_base": {
+          "transport": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-knowledge-base"],
+          "env": {}
+        }
+      },
+      "tools": {
+        "allow": ["knowledge_base.search"]
+      },
+      "policy": {
+        "knowledge_base.search": {
+          "max_calls": 3
+        }
+      }
+    }
+  },
+  "agents": {
+    "classifier": {
+      "description": "Fast classification agent for ticket categorization.",
+      "llm": {
+        "backend": "ollama",
+        "model": "qwen3:1.7b",
+        "temperature": 0.0
+      }
+    },
+    "responder": {
+      "description": "Empathetic support response agent.",
+      "llm": {
+        "backend": "ollama",
+        "model": "qwen3:7b",
+        "temperature": 0.5,
+        "max_tokens": 2048
+      }
+    }
+  },
+  "steps": [
+    {
+      "id": "classify",
+      "name": "Classify ticket",
+      "agent_ref": "classifier",
+      "prompt": {
+        "system": "You classify support tickets. Return category, severity, and sentiment.",
+        "user": "Classify this support ticket:\n\n{{ inputs.ticket }}\n\nReturn:\n- Category: bug, feature_request, billing, account, or other\n- Severity: low, medium, high, critical\n- Sentiment: positive, neutral, negative, angry\n- Summary: one sentence"
+      },
+      "outputs": {
+        "classification": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "search_kb",
+      "name": "Search knowledge base",
+      "depends_on": ["classify"],
+      "plugins": ["knowledge_base"],
+      "prompt": {
+        "system": "You search for relevant support articles.",
+        "user": "Based on this ticket classification, find relevant knowledge base articles:\n\n{{ steps.classify.outputs.classification }}\n\nOriginal ticket: {{ inputs.ticket }}"
+      },
+      "tools": {
+        "allow": ["knowledge_base.search"]
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 3,
+        "stop_on": "no_tool_call"
+      },
+      "outputs": {
+        "articles": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "draft_response",
+      "name": "Draft response",
+      "depends_on": ["classify", "search_kb"],
+      "agent_ref": "responder",
+      "prompt": {
+        "system": "You are a helpful, empathetic support agent. Language: {{ inputs.language }}. Be warm, professional, and solution-oriented.",
+        "user": "Draft a response to this customer ticket:\n\nTicket: {{ inputs.ticket }}\n\nClassification: {{ steps.classify.outputs.classification }}\n\nKnowledge base articles: {{ steps.search_kb.outputs.articles }}\n\nInclude:\n1. Acknowledgment of their issue\n2. Specific next steps or solution\n3. Expected timeline\n4. Offer for follow-up"
+      },
+      "outputs": {
+        "response_draft": "{{ response.text }}"
+      }
+    }
+  ],
+  "error_handling": {
+    "on_step_failure": "fail_fast",
+    "fallback_steps": {
+      "search_kb": {
+        "skip_if_error": true,
+        "reason": "Knowledge base search is optional; response can be drafted without it"
+      }
+    }
+  },
+  "output": {
+    "format": "markdown",
+    "destination": "stdout",
+    "include_run_metadata": true,
+    "fields": [
+      "steps.classify.outputs.classification",
+      "steps.draft_response.outputs.response_draft"
+    ]
+  }
+}

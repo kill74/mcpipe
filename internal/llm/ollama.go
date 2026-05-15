@@ -1,8 +1,12 @@
 package llm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -43,6 +47,17 @@ type ollamaToolCall struct {
 	} `json:"function"`
 }
 
+type ollamaStreamChunk struct {
+	Model              string        `json:"model"`
+	CreatedAt        string        `json:"created_at"`
+	Message          ollamaMessage `json:"message"`
+	Done             bool          `json:"done"`
+	TotalDuration    int64         `json:"total_duration,omitempty"`
+	LoadDuration     int64         `json:"load_duration,omitempty"`
+	PromptEvalCount  int           `json:"prompt_eval_count,omitempty"`
+	EvalCount        int           `json:"eval_count,omitempty"`
+}
+
 func (r *Router) completeOllama(ctx context.Context, req Request) (Response, error) {
 	if strings.TrimSpace(req.Model) == "" {
 		return Response{}, fmt.Errorf("ollama model is required")
@@ -73,15 +88,22 @@ func (r *Router) completeOllama(ctx context.Context, req Request) (Response, err
 	if req.MaxTokens > 0 {
 		options["num_predict"] = req.MaxTokens
 	}
+	streaming := req.Stream && req.Progress != nil
 	body := ollamaRequest{
 		Model:    req.Model,
-		Stream:   false,
+		Stream:   streaming,
 		Messages: messages,
 		Tools:    tools,
 		Options:  options,
 	}
+	url := strings.TrimRight(r.OllamaURL, "/") + "/api/chat"
+
+	if streaming {
+		return r.completeOllamaStream(ctx, req, body, nameMap, url)
+	}
+
 	var out ollamaResponse
-	if err := requestJSON(ctx, r.HTTP, "POST", strings.TrimRight(r.OllamaURL, "/")+"/api/chat", nil, body, &out); err != nil {
+	if err := requestJSON(ctx, r.HTTP, "POST", url, nil, body, &out); err != nil {
 		return Response{}, err
 	}
 	resp := Response{Text: out.Message.Content}
@@ -92,4 +114,55 @@ func (r *Router) completeOllama(ctx context.Context, req Request) (Response, err
 		})
 	}
 	return resp, nil
+}
+
+func (r *Router) completeOllamaStream(ctx context.Context, req Request, body ollamaRequest, nameMap map[string]string, url string) (Response, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, err
+	}
+	httpReq, err := newRequest(ctx, "POST", url, nil, bytes.NewReader(data))
+	if err != nil {
+		return Response{}, err
+	}
+	resp, err := r.HTTP.Do(httpReq)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return Response{}, fmt.Errorf("ollama http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var text strings.Builder
+	var usage Usage
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var chunk ollamaStreamChunk
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
+		}
+		if chunk.Message.Content != "" {
+			text.WriteString(chunk.Message.Content)
+			if req.Progress != nil {
+				req.Progress(chunk.Message.Content)
+			}
+		}
+		if chunk.Done {
+			if chunk.PromptEvalCount > 0 {
+				usage.InputTokens = chunk.PromptEvalCount
+			}
+			if chunk.EvalCount > 0 {
+				usage.OutputTokens = chunk.EvalCount
+			}
+			break
+		}
+	}
+	return Response{Text: text.String(), Usage: usage}, scanner.Err()
 }

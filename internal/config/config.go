@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -169,9 +170,11 @@ type OnPipelineFailure struct {
 }
 
 type Notify struct {
-	Channel           string `json:"channel,omitempty"`
-	IncludeRunID      bool   `json:"include_run_id,omitempty"`
-	IncludeFailedStep bool   `json:"include_failed_step,omitempty"`
+	Channel           string            `json:"channel,omitempty"`
+	URL               string            `json:"url,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	IncludeRunID      bool              `json:"include_run_id,omitempty"`
+	IncludeFailedStep bool              `json:"include_failed_step,omitempty"`
 }
 
 type Output struct {
@@ -467,8 +470,40 @@ func (p *Pipeline) ResolveInputs(raw map[string]string) (map[string]any, error) 
 		spec := p.Inputs[name]
 		value, ok := raw[name]
 		if !ok && spec.Default != nil {
-			value = fmt.Sprint(spec.Default)
-			ok = true
+			switch spec.Type {
+			case "number":
+				switch v := spec.Default.(type) {
+				case float64:
+					resolved[name] = v
+				case int:
+					resolved[name] = float64(v)
+				default:
+					resolved[name] = fmt.Sprint(v)
+				}
+			case "boolean":
+				switch v := spec.Default.(type) {
+				case bool:
+					resolved[name] = v
+				default:
+					resolved[name] = strings.ToLower(fmt.Sprint(v)) == "true"
+				}
+			case "array":
+				switch v := spec.Default.(type) {
+				case []any:
+					items := make([]string, 0, len(v))
+					for _, item := range v {
+						items = append(items, fmt.Sprint(item))
+					}
+					resolved[name] = items
+				case []string:
+					resolved[name] = v
+				default:
+					resolved[name] = []string{fmt.Sprint(v)}
+				}
+			default:
+				resolved[name] = fmt.Sprint(spec.Default)
+			}
+			continue
 		}
 		if !ok {
 			if spec.Required {
@@ -479,7 +514,31 @@ func (p *Pipeline) ResolveInputs(raw map[string]string) (map[string]any, error) 
 		if err := validateInputValue(name, spec, value); err != nil {
 			return nil, err
 		}
-		resolved[name] = value
+		switch spec.Type {
+		case "number":
+			n, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return nil, fmt.Errorf("input %q must be a number: %w", name, err)
+			}
+			resolved[name] = n
+		case "boolean":
+			switch strings.ToLower(value) {
+			case "true", "1", "yes":
+				resolved[name] = true
+			case "false", "0", "no":
+				resolved[name] = false
+			default:
+				return nil, fmt.Errorf("input %q must be a boolean (true/false/1/0/yes/no)", name)
+			}
+		case "array":
+			var items []string
+			if err := json.Unmarshal([]byte(value), &items); err != nil {
+				return nil, fmt.Errorf("input %q must be a JSON array of strings: %w", name, err)
+			}
+			resolved[name] = items
+		default:
+			resolved[name] = value
+		}
 	}
 
 	for name := range raw {
@@ -532,10 +591,28 @@ func validateInputValue(name string, spec InputSpec, value string) error {
 		if !found {
 			return fmt.Errorf("input %q must be one of %s", name, strings.Join(spec.Values, ", "))
 		}
+	case "number":
+		if _, err := strconv.ParseFloat(value, 64); err != nil {
+			return fmt.Errorf("input %q must be a number: %w", name, err)
+		}
+	case "boolean":
+		switch strings.ToLower(value) {
+		case "true", "false", "1", "0", "yes", "no":
+		default:
+			return fmt.Errorf("input %q must be a boolean (true/false/1/0/yes/no)", name)
+		}
+	case "array":
+		var items []string
+		if err := json.Unmarshal([]byte(value), &items); err != nil {
+			return fmt.Errorf("input %q must be a JSON array of strings: %w", name, err)
+		}
 	default:
 		return fmt.Errorf("input %q has unsupported type %q", name, spec.Type)
 	}
 	if spec.Pattern != "" {
+		if spec.Type != "string" && spec.Type != "enum" {
+			return fmt.Errorf("input %q pattern only applies to string types", name)
+		}
 		re, err := regexp.Compile(spec.Pattern)
 		if err != nil {
 			return fmt.Errorf("input %q pattern is invalid: %w", name, err)

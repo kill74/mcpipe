@@ -72,7 +72,7 @@ func (p *Pipeline) Validate() error {
 func (p *Pipeline) validateInputs() []string {
 	var problems []string
 	for name, spec := range p.Inputs {
-		if spec.Type != "string" && spec.Type != "enum" {
+		if spec.Type != "string" && spec.Type != "enum" && spec.Type != "number" && spec.Type != "boolean" && spec.Type != "array" {
 			problems = append(problems, fmt.Sprintf("input %q has unsupported type %q", name, spec.Type))
 		}
 		if spec.Type == "enum" {
@@ -86,7 +86,17 @@ func (p *Pipeline) validateInputs() []string {
 				}
 			}
 		}
+		if spec.Type == "array" && spec.Default != nil {
+			switch spec.Default.(type) {
+			case []any, []string:
+			default:
+				problems = append(problems, fmt.Sprintf("input %q array default must be a list", name))
+			}
+		}
 		if spec.Pattern != "" {
+			if spec.Type != "string" && spec.Type != "enum" {
+				problems = append(problems, fmt.Sprintf("input %q pattern only applies to string types", name))
+			}
 			if _, err := regexp.Compile(spec.Pattern); err != nil {
 				problems = append(problems, fmt.Sprintf("input %q pattern is invalid: %v", name, err))
 			}

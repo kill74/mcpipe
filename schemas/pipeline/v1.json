@@ -99,7 +99,7 @@
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
-        "type": { "type": "string", "enum": ["string", "enum"] },
+        "type": { "type": "string", "enum": ["string", "enum", "number", "boolean", "array"] },
         "description": { "type": "string" },
         "required": { "type": "boolean" },
         "example": {},
@@ -255,6 +255,8 @@
       "additionalProperties": false,
       "properties": {
         "channel": { "type": "string" },
+        "url": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
         "include_run_id": { "type": "boolean" },
         "include_failed_step": { "type": "boolean" }
       }

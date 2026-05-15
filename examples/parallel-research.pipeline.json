@@ -1,0 +1,122 @@
+{
+  "$schema": "https://mcpipe.dev/schemas/pipeline/v1.json",
+  "version": "1.0.0",
+  "metadata": {
+    "id": "parallel-research-pipeline",
+    "name": "Parallel Multi-Source Research",
+    "description": "Demonstrates parallel step execution, exponential backoff retries, and synthesis from multiple independent sources."
+  },
+  "defaults": {
+    "timeout_ms": 30000,
+    "retry": {
+      "max_attempts": 3,
+      "backoff": "exponential",
+      "backoff_base_ms": 500,
+      "retryable_errors": ["rate_limit", "timeout", "server_error"]
+    },
+    "llm": {
+      "backend": "ollama",
+      "model": "qwen3:7b",
+      "temperature": 0.2,
+      "max_tokens": 2048
+    }
+  },
+  "inputs": {
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "The research topic."
+    },
+    "max_sources": {
+      "type": "number",
+      "default": 3,
+      "description": "Maximum number of sources to consult per search."
+    },
+    "include_code": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include code examples in the final report."
+    },
+    "sources": {
+      "type": "array",
+      "default": ["general", "technical", "news"],
+      "description": "Research source categories as JSON array."
+    }
+  },
+  "steps": [
+    {
+      "id": "search_general",
+      "name": "General overview",
+      "prompt": {
+        "system": "You provide broad overviews of topics with factual information.",
+        "user": "Provide a general overview of {{ inputs.topic }}. Cover the basics, key concepts, and why it matters. Limit to {{ inputs.max_sources | truncate: 3 }} main points."
+      },
+      "outputs": {
+        "overview": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "search_technical",
+      "name": "Technical deep dive",
+      "depends_on": [],
+      "prompt": {
+        "system": "You provide technical deep dives for engineering audiences.",
+        "user": "Provide a technical deep dive on {{ inputs.topic }}. Cover architecture, implementation patterns, trade-offs, and best practices. Include {{ inputs.max_sources | truncate: 3 }} technical references."
+      },
+      "outputs": {
+        "technical": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "search_news",
+      "name": "Recent developments",
+      "depends_on": [],
+      "prompt": {
+        "system": "You track recent developments and news on technical topics.",
+        "user": "What are the recent developments and news about {{ inputs.topic }}? Focus on the last 6 months. List {{ inputs.max_sources | truncate: 3 }} key events or announcements."
+      },
+      "outputs": {
+        "news": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "synthesize",
+      "name": "Synthesize research",
+      "depends_on": ["search_general", "search_technical", "search_news"],
+      "llm": {
+        "backend": "ollama",
+        "model": "qwen3:7b",
+        "temperature": 0.4,
+        "max_tokens": 4096
+      },
+      "prompt": {
+        "system": "You synthesize multiple research sources into a coherent report.",
+        "user": "Synthesize these research findings into a comprehensive report on {{ inputs.topic }}:\n\n## General Overview\n{{ steps.search_general.outputs.overview }}\n\n## Technical Deep Dive\n{{ steps.search_technical.outputs.technical }}\n\n## Recent Developments\n{{ steps.search_news.outputs.news }}\n\nInclude code examples: {{ inputs.include_code }}\n\nStructure:\n1. Executive summary\n2. Background and context\n3. Technical analysis\n4. Current state and trends\n5. Future outlook\n6. References"
+      },
+      "outputs": {
+        "report": "{{ response.text }}"
+      }
+    }
+  ],
+  "error_handling": {
+    "on_step_failure": "fail_fast",
+    "fallback_steps": {
+      "search_news": {
+        "skip_if_error": true,
+        "reason": "News search is optional; report proceeds with general and technical sources"
+      },
+      "search_technical": {
+        "skip_if_error": true,
+        "reason": "Technical search is optional; report proceeds with general overview"
+      }
+    }
+  },
+  "output": {
+    "format": "markdown",
+    "destination": "stdout",
+    "include_run_metadata": true,
+    "fields": [
+      "steps.synthesize.outputs.report"
+    ]
+  }
+}

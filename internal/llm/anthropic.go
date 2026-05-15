@@ -1,10 +1,14 @@
 package llm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 )
 
@@ -15,6 +19,7 @@ type anthropicRequest struct {
 	System      string          `json:"system,omitempty"`
 	Messages    []anthropicMsg  `json:"messages"`
 	Tools       []anthropicTool `json:"tools,omitempty"`
+	Stream      bool            `json:"stream,omitempty"`
 }
 
 type anthropicMsg struct {
@@ -41,6 +46,22 @@ type anthropicContent struct {
 	Text  string          `json:"text,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+}
+
+type anthropicStreamEvent struct {
+	Type  string          `json:"type"`
+	Index int             `json:"index,omitempty"`
+	Delta anthropicDelta  `json:"delta,omitempty"`
+	Usage anthropicUsage  `json:"usage,omitempty"`
+}
+
+type anthropicDelta struct {
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
+type anthropicUsage struct {
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 func (r *Router) completeAnthropic(ctx context.Context, req Request) (Response, error) {
@@ -76,12 +97,18 @@ func (r *Router) completeAnthropic(ctx context.Context, req Request) (Response, 
 			Role:    "user",
 			Content: appendToolResults(req.User, req.ToolResults),
 		}},
-		Tools: tools,
+		Tools:  tools,
+		Stream: req.Stream && req.Progress != nil,
 	}
 	headers := map[string]string{
 		"x-api-key":         r.AnthropicKey,
 		"anthropic-version": "2023-06-01",
 	}
+
+	if body.Stream {
+		return r.completeAnthropicStream(ctx, req, body, headers, nameMap)
+	}
+
 	var out anthropicResponse
 	if err := requestJSON(ctx, r.HTTP, "POST", r.AnthropicURL, headers, body, &out); err != nil {
 		return Response{}, err
@@ -113,4 +140,71 @@ func (r *Router) completeAnthropic(ctx context.Context, req Request) (Response, 
 		}
 	}
 	return resp, nil
+}
+
+func (r *Router) completeAnthropicStream(ctx context.Context, req Request, body anthropicRequest, headers map[string]string, nameMap map[string]string) (Response, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, err
+	}
+	httpReq, err := newRequest(ctx, "POST", r.AnthropicURL, headers, bytes.NewReader(data))
+	if err != nil {
+		return Response{}, err
+	}
+	resp, err := r.HTTP.Do(httpReq)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return Response{}, fmt.Errorf("anthropic http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var text strings.Builder
+	var usage Usage
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			break
+		}
+		var event anthropicStreamEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+		switch event.Type {
+		case "content_block_delta":
+			if event.Delta.Text != "" {
+				text.WriteString(event.Delta.Text)
+				if req.Progress != nil {
+					req.Progress(event.Delta.Text)
+				}
+			}
+		case "message_delta":
+			if event.Usage.OutputTokens > 0 {
+				usage.OutputTokens = event.Usage.OutputTokens
+			}
+		}
+	}
+	return Response{Text: text.String(), Usage: usage}, scanner.Err()
+}
+
+func newRequest(ctx context.Context, method, url string, headers map[string]string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	return req, nil
 }

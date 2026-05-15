@@ -1,0 +1,128 @@
+{
+  "$schema": "https://mcpipe.dev/schemas/pipeline/v1.json",
+  "version": "1.0.0",
+  "metadata": {
+    "id": "code-review-pipeline",
+    "name": "Automated Code Review",
+    "description": "Review a pull request or codebase using Anthropic Claude with filesystem MCP access."
+  },
+  "defaults": {
+    "timeout_ms": 45000,
+    "retry": {
+      "max_attempts": 2,
+      "backoff": "exponential",
+      "backoff_base_ms": 1000,
+      "retryable_errors": ["rate_limit", "timeout"]
+    },
+    "llm": {
+      "backend": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "temperature": 0.2,
+      "max_tokens": 4096
+    }
+  },
+  "inputs": {
+    "repo_path": {
+      "type": "string",
+      "required": true,
+      "description": "Path to the repository or diff to review."
+    },
+    "focus": {
+      "type": "enum",
+      "values": ["security", "performance", "readability", "all"],
+      "default": "all",
+      "description": "Review focus area."
+    },
+    "strict": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable strict mode with tighter limits."
+    }
+  },
+  "mcp_servers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/mcpipe-outputs"],
+      "env": {}
+    }
+  },
+  "steps": [
+    {
+      "id": "analyze",
+      "name": "Analyze code",
+      "prompt": {
+        "system": "You are a senior code reviewer. Focus on {{ inputs.focus }} issues. Be specific with file paths and line references.",
+        "user": "Review the code at {{ inputs.repo_path }}. Return prioritized findings: critical bugs, security risks, performance issues, and style concerns. Be concise."
+      },
+      "tools": {
+        "allow": ["filesystem.read_file"]
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 5,
+        "stop_on": "no_tool_call"
+      },
+      "outputs": {
+        "findings": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "summary",
+      "name": "Generate review summary",
+      "depends_on": ["analyze"],
+      "prompt": {
+        "system": "You write clear, actionable code review summaries.",
+        "user": "Create a structured review summary from these findings:\n\n{{ steps.analyze.outputs.findings }}\n\nFormat:\n1. Overall assessment (2 sentences)\n2. Critical issues (if any)\n3. Suggested improvements\n4. Positive notes"
+      },
+      "outputs": {
+        "summary": "{{ response.text }}"
+      }
+    },
+    {
+      "id": "persist",
+      "name": "Write review report",
+      "depends_on": ["summary"],
+      "prompt": {
+        "system": "You write files exactly as instructed.",
+        "user": "Save this review summary to 'review-{{ inputs.repo_path | slugify }}.md':\n\n{{ steps.summary.outputs.summary }}"
+      },
+      "tools": {
+        "allow": ["filesystem.write_file"]
+      },
+      "agent": {
+        "enabled": true,
+        "max_iterations": 2,
+        "stop_on": "no_tool_call"
+      },
+      "outputs": {
+        "file_path": "{{ response.tool_results[0].path }}"
+      }
+    }
+  ],
+  "error_handling": {
+    "on_step_failure": "fail_fast",
+    "fallback_steps": {
+      "persist": {
+        "skip_if_error": true,
+        "reason": "File write is optional; summary is still available on stdout"
+      }
+    }
+  },
+  "policy": {
+    "filesystem.write_file": {
+      "allowed_paths": [".mcpipe/outputs"],
+      "max_bytes": 500000,
+      "max_calls": 1
+    }
+  },
+  "output": {
+    "format": "markdown",
+    "destination": "stdout",
+    "include_run_metadata": true,
+    "fields": [
+      "steps.summary.outputs.summary",
+      "steps.persist.outputs.file_path"
+    ]
+  }
+}

@@ -138,7 +138,7 @@ func TestCLIVersion(t *testing.T) {
 	if err := run([]string{"version"}, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(out.String()) != "mcpipe 0.1.0" {
+	if strings.TrimSpace(out.String()) != "mcpipe 0.3.0" {
 		t.Fatalf("unexpected version output: %q", out.String())
 	}
 }

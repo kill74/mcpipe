@@ -206,3 +206,95 @@ func TestRuntimeWarnings(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveInputsNumber(t *testing.T) {
+	p, err := Load(strings.NewReader(`{
+		"version": "1.0.0",
+		"inputs": {
+			"threshold": {"type": "number", "default": 0.5},
+			"count": {"type": "number", "required": true}
+		},
+		"defaults": {"llm": {"backend": "ollama", "model": "qwen"}},
+		"steps": [
+			{"id": "a", "prompt": {"user": "a"}, "outputs": {"out": "{{ response.text }}"}}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := p.ResolveInputs(map[string]string{"count": "42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := resolved["threshold"].(float64); !ok || v != 0.5 {
+		t.Fatalf("expected default 0.5, got %#v", resolved["threshold"])
+	}
+	if v, ok := resolved["count"].(float64); !ok || v != 42.0 {
+		t.Fatalf("expected 42.0, got %#v", resolved["count"])
+	}
+	if _, err := p.ResolveInputs(map[string]string{"count": "not-a-number"}); err == nil {
+		t.Fatal("expected number parse error")
+	}
+}
+
+func TestResolveInputsBoolean(t *testing.T) {
+	p, err := Load(strings.NewReader(`{
+		"version": "1.0.0",
+		"inputs": {
+			"verbose": {"type": "boolean", "default": false},
+			"enabled": {"type": "boolean", "required": true}
+		},
+		"defaults": {"llm": {"backend": "ollama", "model": "qwen"}},
+		"steps": [
+			{"id": "a", "prompt": {"user": "a"}, "outputs": {"out": "{{ response.text }}"}}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := p.ResolveInputs(map[string]string{"enabled": "yes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := resolved["verbose"].(bool); !ok || v != false {
+		t.Fatalf("expected default false, got %#v", resolved["verbose"])
+	}
+	if v, ok := resolved["enabled"].(bool); !ok || v != true {
+		t.Fatalf("expected true, got %#v", resolved["enabled"])
+	}
+	for _, bad := range []string{"maybe", "on", ""} {
+		if _, err := p.ResolveInputs(map[string]string{"enabled": bad}); err == nil {
+			t.Fatalf("expected boolean error for %q", bad)
+		}
+	}
+}
+
+func TestResolveInputsArray(t *testing.T) {
+	p, err := Load(strings.NewReader(`{
+		"version": "1.0.0",
+		"inputs": {
+			"tags": {"type": "array", "default": ["default"]},
+			"fields": {"type": "array", "required": true}
+		},
+		"defaults": {"llm": {"backend": "ollama", "model": "qwen"}},
+		"steps": [
+			{"id": "a", "prompt": {"user": "a"}, "outputs": {"out": "{{ response.text }}"}}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := p.ResolveInputs(map[string]string{"fields": `["name","email"]`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := resolved["tags"].([]string); !ok || len(v) != 1 || v[0] != "default" {
+		t.Fatalf("expected default [default], got %#v", resolved["tags"])
+	}
+	if v, ok := resolved["fields"].([]string); !ok || len(v) != 2 || v[0] != "name" || v[1] != "email" {
+		t.Fatalf("expected [name, email], got %#v", resolved["fields"])
+	}
+	if _, err := p.ResolveInputs(map[string]string{"fields": `not-json`}); err == nil {
+		t.Fatal("expected array parse error")
+	}
+}

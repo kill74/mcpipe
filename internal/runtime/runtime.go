@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -13,17 +15,19 @@ import (
 	"mcpipe/internal/config"
 	"mcpipe/internal/llm"
 	"mcpipe/internal/mcp"
+	"mcpipe/internal/notify"
 	"mcpipe/internal/security"
 	pipetemplate "mcpipe/internal/template"
 )
 
 type Engine struct {
-	Pipeline *config.Pipeline
-	Inputs   map[string]any
-	LLM      llm.Client
-	MCP      mcp.Manager
-	Now      func() time.Time
-	Security *security.Policy
+	Pipeline      *config.Pipeline
+	Inputs        map[string]any
+	LLM           llm.Client
+	MCP           mcp.Manager
+	Now           func() time.Time
+	Security      *security.Policy
+	ProgressWriter io.Writer
 }
 
 type RunResult struct {
@@ -176,6 +180,7 @@ func (e *Engine) Run(ctx context.Context) (*RunResult, error) {
 			cancel()
 			result.CompletedAt = e.now()
 			auditor.Event("run_error", map[string]any{"error": levelErr.Error()})
+			e.sendFailureNotification(result, "", levelErr.Error())
 			return result, levelErr
 		}
 	}
@@ -184,6 +189,7 @@ func (e *Engine) Run(ctx context.Context) (*RunResult, error) {
 	outputs, err := ResolveOutputFields(e.Pipeline, stepOutputs)
 	if err != nil {
 		auditor.Event("run_error", map[string]any{"error": err.Error()})
+		e.sendFailureNotification(result, "", err.Error())
 		return result, err
 	}
 	result.Outputs = outputs
@@ -193,6 +199,21 @@ func (e *Engine) Run(ctx context.Context) (*RunResult, error) {
 	}
 	auditor.Event("run_end", map[string]any{"duration_ms": result.CompletedAt.Sub(result.StartedAt).Milliseconds(), "output_hashes": outputHashes})
 	return result, nil
+}
+
+func (e *Engine) sendFailureNotification(result *RunResult, failedStep, errMsg string) {
+	n := e.Pipeline.ErrorHandling.OnPipelineFailure
+	if n == nil || n.Notify == nil {
+		return
+	}
+	cfg := *n.Notify
+	if cfg.URL == "" && cfg.Channel == "" {
+		return
+	}
+	usage := Summarize(result)
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	_ = notify.Send(ctx, cfg, e.Pipeline.Schema, result.RunID, failedStep, errMsg, result.StartedAt, result.CompletedAt, usage.Attempts, usage.ToolCalls, usage.InputTokens, usage.OutputTokens)
 }
 
 func (e *Engine) executeStep(ctx context.Context, step config.Step, stepOutputs map[string]map[string]string) (StepResult, error) {
@@ -237,6 +258,7 @@ func (e *Engine) executeStepOnce(ctx context.Context, effective config.Effective
 		Inputs:      e.Inputs,
 		StepOutputs: stepOutputs,
 		Now:         e.now(),
+		Env:         envMap(),
 	}
 	system, err := pipetemplate.RenderString(step.Prompt.System, tplCtx)
 	if err != nil {
@@ -271,6 +293,11 @@ func (e *Engine) executeStepOnce(ctx context.Context, effective config.Effective
 		Stream:      boolValue(effective.LLM.Stream),
 		System:      system,
 		User:        user,
+	}
+	if req.Stream && e.ProgressWriter != nil {
+		req.Progress = func(chunk string) {
+			fmt.Fprint(e.ProgressWriter, chunk)
+		}
 	}
 
 	var response llm.Response
@@ -355,7 +382,7 @@ func (e *Engine) executeStepOnce(ctx context.Context, effective config.Effective
 
 func evaluateStepOutputs(step config.Step, inputs map[string]any, stepOutputs map[string]map[string]string, response pipetemplate.Response, now time.Time) (map[string]string, error) {
 	out := map[string]string{}
-	ctx := pipetemplate.Context{Inputs: inputs, StepOutputs: stepOutputs, Response: response, Now: now}
+	ctx := pipetemplate.Context{Inputs: inputs, StepOutputs: stepOutputs, Response: response, Now: now, Env: envMap()}
 	for name, expr := range step.Outputs {
 		value, err := pipetemplate.RenderString(expr, ctx)
 		if err != nil {
@@ -516,4 +543,14 @@ func boolValue(v *bool) bool {
 		return false
 	}
 	return *v
+}
+
+func envMap() map[string]string {
+	out := make(map[string]string)
+	for _, kv := range os.Environ() {
+		if key, val, ok := strings.Cut(kv, "="); ok {
+			out[key] = val
+		}
+	}
+	return out
 }
